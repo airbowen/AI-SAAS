@@ -1,70 +1,79 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { RegisterInput, LoginInput } from './types';
+import { redis } from '../config/redis';
+import { SendCodeInput, VerifyCodeInput } from './types';
 
 const prisma = new PrismaClient();
 
-export async function register(req: Request, res: Response) {
-  try {
-    const { email, password }: RegisterInput = req.body;
+// 生成6位随机验证码
+function generateVerificationCode(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
 
-    // 检查邮箱是否已存在
-    const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) {
-      return res.status(400).json({ error: '邮箱已被注册' });
+// 发送验证码
+export async function sendCode(req: Request, res: Response) {
+  try {
+    const { phone }: SendCodeInput = req.body;
+
+    // 检查是否频繁发送
+    const lastSentTime = await redis.get(`sms:lastSent:${phone}`);
+    if (lastSentTime && Date.now() - parseInt(lastSentTime) < 60000) {
+      return res.status(429).json({ error: '请等待60秒后再试' });
     }
 
-    // 加密密码
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const code = generateVerificationCode();
+    
+    // 将验证码存入 Redis，5分钟过期
+    await redis.setex(`sms:code:${phone}`, 300, code);
+    // 记录发送时间
+    await redis.set(`sms:lastSent:${phone}`, Date.now().toString());
 
-    // 创建用户
-    const user = await prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-      },
-    });
+    // TODO: 这里需要集成实际的短信服务
+    // 开发环境直接返回验证码
+    if (process.env.NODE_ENV === 'development') {
+      return res.json({ message: '验证码已发送', code });
+    }
 
-    // 生成 JWT token
-    const token = jwt.sign(
-      { userId: user.id },
-      process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: '24h' }
-    );
-
-    res.status(201).json({ token });
+    res.json({ message: '验证码已发送' });
   } catch (error) {
-    res.status(500).json({ error: '注册失败' });
+    console.error('发送验证码错误:', error);
+    res.status(500).json({ error: '发送验证码失败' });
   }
 }
 
-export async function login(req: Request, res: Response) {
+// 验证码登录
+export async function verifyCode(req: Request, res: Response) {
   try {
-    const { email, password }: LoginInput = req.body;
+    const { phone, code }: VerifyCodeInput = req.body;
 
-    // 查找用户
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      return res.status(400).json({ error: '用户不存在' });
+    // 获取存储的验证码
+    const storedCode = await redis.get(`sms:code:${phone}`);
+    if (!storedCode || storedCode !== code) {
+      return res.status(400).json({ error: '验证码错误或已过期' });
     }
 
-    // 验证密码
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
-      return res.status(400).json({ error: '密码错误' });
+    // 验证成功后删除验证码
+    await redis.del(`sms:code:${phone}`);
+
+    // 查找或创建用户
+    let user = await prisma.user.findUnique({ where: { phone } });
+    if (!user) {
+      user = await prisma.user.create({
+        data: { phone }
+      });
     }
 
     // 生成 JWT token
     const token = jwt.sign(
       { userId: user.id },
       process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: '24h' }
+      { expiresIn: '30d' }
     );
 
     res.json({ token });
   } catch (error) {
+    console.error('验证码登录错误:', error);
     res.status(500).json({ error: '登录失败' });
   }
 }

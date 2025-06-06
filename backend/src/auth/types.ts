@@ -8,4 +8,13 @@ interface LoginInput {
   password: string;
 }
 
+export interface SendCodeInput {
+  phone: string;
+}
+
+export interface VerifyCodeInput {
+  phone: string;
+  code: string;
+}
+
 export { RegisterInput, LoginInput };
