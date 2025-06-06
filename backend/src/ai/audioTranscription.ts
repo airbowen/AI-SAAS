@@ -28,6 +28,8 @@ class AudioTranscriptionServer {
   private readonly connectionTimeout: number;
   private prisma: PrismaClient;
   private readonly costPerMinute: number = 0.1;  // 每分钟计费金额
+  private readonly heartbeatInterval = 30000; // 30秒心跳间隔
+  private readonly maxConnectionsPerUser = 3;  // 每用户最大连接数
 
   constructor() {
     this.wss = new WebSocketServer({ port: 8080 });
@@ -38,14 +40,30 @@ class AudioTranscriptionServer {
 
     this.initialize();
     this.startConnectionMonitoring();
+    this.setupHeartbeat();
+    this.setupRateLimiting();
   }
 
   private async getUserFromToken(token: string): Promise<any> {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
+      
+      // 先检查缓存
+      const cachedUser = await getCachedUserInfo(decoded.userId);
+      if (cachedUser) {
+        return cachedUser;
+      }
+  
+      // 缓存未命中，从数据库获取
       const user = await this.prisma.user.findUnique({
         where: { id: decoded.userId }
       });
+  
+      if (user) {
+        // 存入缓存
+        await cacheUserInfo(decoded.userId, user);
+      }
+  
       return user;
     } catch (error) {
       return null;
@@ -348,6 +366,55 @@ class AudioTranscriptionServer {
     // 这里需要实现用户认证逻辑
     // 可以从请求头或 cookie 中获取用户标识
     return req.headers['x-user-id'] || 'anonymous';
+  }
+
+  private setupHeartbeat() {
+    setInterval(() => {
+      this.connections.forEach((conn, id) => {
+        if (Date.now() - conn.lastActivity > this.connectionTimeout) {
+          conn.ws.close();
+          this.connections.delete(id);
+        } else {
+          conn.ws.ping();
+        }
+      });
+    }, this.heartbeatInterval);
+  }
+
+  private setupRateLimiting() {
+    this.wss.on('connection', async (ws, req) => {
+      const token = this.extractToken(req);
+      if (!token) {
+        ws.close();
+        return;
+      }
+
+      const user = await this.getUserFromToken(token);
+      if (!user) {
+        ws.close();
+        return;
+      }
+
+      // 检查用户连接数限制
+      const userConnections = Array.from(this.connections.values())
+        .filter(conn => conn.userId === user.id).length;
+
+      if (userConnections >= this.maxConnectionsPerUser) {
+        ws.close();
+        return;
+      }
+
+      // ... 其余连接处理逻辑 ...
+    });
+  }
+
+  // 优化 Token 计算逻辑
+  private calculateTokens(duration: number): number {
+    // 基于实际音频内容的复杂度估算 token
+    const averageWordsPerMinute = 150;
+    const averageTokensPerWord = 1.3;
+    const durationInMinutes = duration / 60;
+    return Math.ceil(durationInMinutes * averageWordsPerMinute * averageTokensPerWord);
   }
 }
 

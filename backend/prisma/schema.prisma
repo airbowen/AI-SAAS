@@ -26,20 +26,26 @@ model Transaction {
   id          String    @id @default(cuid())
   user        User      @relation(fields: [userId], references: [id])
   userId      String
-  type        String    // 'recharge' or 'consume'
+  type        String    
   amount      Float
   description String?
   createdAt   DateTime  @default(now())
+
+  @@index([userId, type]) // 添加复合索引
+  @@index([createdAt])    // 添加时间索引
 }
 
 model UsageLog {
   id          String    @id @default(cuid())
   user        User      @relation(fields: [userId], references: [id])
   userId      String
-  type        String    // 'audio_transcription'
-  duration    Float     // 音频时长（秒）
-  tokens      Int       // API 调用消耗的 token 数
-  cost        Float     // 计费金额
-  status      String    // 'success' or 'failed'
+  type        String    
+  duration    Float     
+  tokens      Int       
+  cost        Float     
+  status      String    
   createdAt   DateTime  @default(now())
+
+  @@index([userId, type])
+  @@index([createdAt])
 }
