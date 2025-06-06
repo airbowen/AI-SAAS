@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import { PrismaClient } from '@prisma/client';
 import authRoutes from './auth/routes';
+import billingRoutes from './billing/routes';
 
 dotenv.config();
 const app = express();
@@ -16,5 +17,6 @@ app.get('/', (req, res) => {
 });
 
 app.use('/auth', authRoutes);
+app.use('/api/billing', billingRoutes);
 
 app.listen(3000, () => console.log('Server running on http://localhost:3000'));

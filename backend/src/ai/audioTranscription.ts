@@ -2,12 +2,23 @@ import WebSocket from 'ws';
 import { WebSocketServer } from 'ws';
 import fetch from 'node-fetch';
 import { v4 as uuidv4 } from 'uuid';
+import { PrismaClient } from '@prisma/client';
+import jwt from 'jsonwebtoken';
+
+// 添加 JWT payload 类型定义
+interface JwtPayload {
+  userId: string;
+  // 其他可能的 payload 字段
+}
 
 interface UserConnection {
   ws: WebSocket;
   gpt4oWs: WebSocket;
   userId: string;
   lastActivity: number;
+  audioStartTime: number;      // 记录音频开始时间
+  totalDuration: number;       // 累计音频时长
+  totalTokens: number;         // 累计消耗的 tokens
 }
 
 class AudioTranscriptionServer {
@@ -15,48 +26,257 @@ class AudioTranscriptionServer {
   private connections: Map<string, UserConnection>;
   private readonly maxConnections: number;
   private readonly connectionTimeout: number;
+  private prisma: PrismaClient;
+  private readonly costPerMinute: number = 0.1;  // 每分钟计费金额
 
   constructor() {
     this.wss = new WebSocketServer({ port: 8080 });
     this.connections = new Map();
-    this.maxConnections = 1000; // 最大并发连接数
-    this.connectionTimeout = 300000; // 连接超时时间（5分钟）
+    this.maxConnections = 1000;
+    this.connectionTimeout = 300000;
+    this.prisma = new PrismaClient();
 
     this.initialize();
     this.startConnectionMonitoring();
   }
 
-  private initialize() {
+  private async getUserFromToken(token: string): Promise<any> {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
+      const user = await this.prisma.user.findUnique({
+        where: { id: decoded.userId }
+      });
+      return user;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  private async checkUserQuota(userId: string): Promise<boolean> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId }
+    });
+
+    if (!user || user.status !== 'active') {
+      return false;
+    }
+
+    return user.balance > 0 && user.usedQuota < user.quotaLimit;
+  }
+
+  private async updateUserQuota(userId: string, duration: number): Promise<void> {
+    const cost = (duration / 60) * this.costPerMinute;
+    
+    await this.prisma.$transaction(async (prisma: PrismaClient) => {
+      // 更新用户余额和已使用配额
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          balance: { decrement: cost },
+          usedQuota: { increment: duration / 60 }
+        }
+      });
+
+      // 记录消费交易
+      await prisma.transaction.create({
+        data: {
+          userId,
+          type: 'consume',
+          amount: cost,
+          description: `Audio transcription service - ${duration} seconds`
+        }
+      });
+
+      // 记录使用日志
+      await prisma.usageLog.create({
+        data: {
+          userId,
+          type: 'audio_transcription',
+          duration,
+          tokens: Math.floor(duration * 2), // 估算 token 消耗
+          cost,
+          status: 'success'
+        }
+      });
+    });
+  }
+
+  private async initialize() {
     this.wss.on('connection', async (ws, req) => {
       try {
+        // 验证用户 Token
+        const token = req.headers['authorization']?.split(' ')[1];
+        if (!token) {
+          ws.close(1008, '未提供认证信息');
+          return;
+        }
+
+        const user = await this.getUserFromToken(token);
+        if (!user) {
+          ws.close(1008, '无效的认证信息');
+          return;
+        }
+
+        // 检查用户配额和余额
+        if (!await this.checkUserQuota(user.id)) {
+          ws.close(1008, '配额不足或余额不足');
+          return;
+        }
+
         // 检查并发连接数限制
         if (this.connections.size >= this.maxConnections) {
           ws.close(1013, '服务器已达到最大连接数限制');
           return;
         }
 
-        // 生成唯一的连接ID
         const connectionId = uuidv4();
-        const userId = this.getUserIdFromRequest(req); // 从请求中获取用户ID（需要实现认证）
-
-        // 创建到 GPT-4o mini 的连接
         const gpt4oWs = await this.createGPT4OConnection();
 
-        // 存储连接信息
         this.connections.set(connectionId, {
           ws,
           gpt4oWs,
-          userId,
-          lastActivity: Date.now()
+          userId: user.id,
+          lastActivity: Date.now(),
+          audioStartTime: Date.now(),
+          totalDuration: 0,
+          totalTokens: 0
         });
 
-        console.log(`新用户连接 - ID: ${connectionId}, 当前连接数: ${this.connections.size}`);
+        console.log(`新用户连接 - ID: ${connectionId}, 用户: ${user.id}`);
 
         this.setupWebSocketHandlers(connectionId, ws, gpt4oWs);
       } catch (error) {
         console.error('处理新连接时发生错误:', error);
         ws.close(1011, '服务器内部错误');
       }
+    });
+  }
+
+  private async checkUserBalance(userId: string, duration: number): Promise<boolean> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId }
+    });
+  
+    if (!user) return false;
+  
+    const cost = (duration / 60) * this.costPerMinute;
+    return user.balance >= cost;
+  }
+  
+  private async updateUserBalance(userId: string, duration: number): Promise<void> {
+    const cost = (duration / 60) * this.costPerMinute;
+  
+    await this.prisma.$transaction(async (prisma: PrismaClient) => {
+      // 扣除余额
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          balance: { decrement: cost },
+          usedQuota: { increment: duration / 60 }
+        }
+      });
+  
+      // 记录消费
+      await prisma.transaction.create({
+        data: {
+          userId,
+          type: 'consume',
+          amount: -cost,
+          description: `音频转写服务 ${duration} 秒`
+        }
+      });
+  
+      // 记录使用情况
+      await prisma.usageLog.create({
+        data: {
+          userId,
+          type: 'audio_transcription',
+          duration,
+          tokens: Math.floor(duration * 2), // 估算token使用量
+          cost,
+          status: 'success'
+        }
+      });
+    });
+  }
+  
+  // 在 setupWebSocketHandlers 方法中添加余额检查
+  private setupWebSocketHandlers(connectionId: string, ws: WebSocket, gpt4oWs: WebSocket) {
+    let audioChunkStartTime = Date.now();
+    
+    ws.on('message', async (data) => {
+      try {
+        const connection = this.connections.get(connectionId);
+        if (!connection) return;
+  
+        // 检查用户余额
+        if (!await this.checkUserBalance(connection.userId, connection.totalDuration)) {
+          ws.close(1008, '余额不足');
+          return;
+        }
+  
+        // 检查用户配额和余额
+        if (!await this.checkUserQuota(connection.userId)) {
+          ws.close(1008, '配额不足或余额不足');
+          return;
+        }
+
+        if (gpt4oWs.readyState === WebSocket.OPEN) {
+          gpt4oWs.send(data);
+          this.updateLastActivity(connectionId);
+
+          // 更新音频时长（假设每个音频块是 20ms）
+          const chunkDuration = (Date.now() - audioChunkStartTime) / 1000;
+          connection.totalDuration += chunkDuration;
+          audioChunkStartTime = Date.now();
+        }
+      } catch (error) {
+        console.error(`处理音频数据错误 - 连接 ${connectionId}:`, error);
+      }
+    });
+
+    gpt4oWs.on('message', async (data) => {
+      try {
+        const response = JSON.parse(data.toString());
+        const connection = this.connections.get(connectionId);
+        if (!connection) return;
+
+        if (response.type === 'audio_transcription.completed') {
+          // 更新用户配额和计费
+          await this.updateUserQuota(
+            connection.userId,
+            connection.totalDuration
+          );
+
+          ws.send(JSON.stringify({
+            type: 'transcription',
+            text: response.text
+          }));
+
+          // 重置计数器
+          connection.totalDuration = 0;
+          connection.totalTokens = 0;
+        }
+      } catch (error) {
+        console.error(`处理转录结果错误 - 连接 ${connectionId}:`, error);
+      }
+    });
+
+    ws.on('close', async () => {
+      const connection = this.connections.get(connectionId);
+      if (connection && connection.totalDuration > 0) {
+        // 确保关闭连接时更新最后的使用记录
+        await this.updateUserQuota(
+          connection.userId,
+          connection.totalDuration
+        );
+      }
+      this.cleanupConnection(connectionId);
+    });
+
+    ws.on('error', (error) => {
+      console.error(`WebSocket 错误 - 连接 ${connectionId}:`, error);
+      this.cleanupConnection(connectionId);
     });
   }
 
@@ -91,46 +311,6 @@ class AudioTranscriptionServer {
       });
 
       gpt4oWs.on('error', reject);
-    });
-  }
-
-  private setupWebSocketHandlers(connectionId: string, ws: WebSocket, gpt4oWs: WebSocket) {
-    // 处理来自客户端的音频数据
-    ws.on('message', (data) => {
-      try {
-        if (gpt4oWs.readyState === WebSocket.OPEN) {
-          gpt4oWs.send(data);
-          this.updateLastActivity(connectionId);
-        }
-      } catch (error) {
-        console.error(`处理音频数据错误 - 连接 ${connectionId}:`, error);
-      }
-    });
-
-    // 处理来自 GPT-4o mini 的转录结果
-    gpt4oWs.on('message', (data) => {
-      try {
-        const response = JSON.parse(data.toString());
-        if (response.type === 'audio_transcription.completed') {
-          ws.send(JSON.stringify({
-            type: 'transcription',
-            text: response.text
-          }));
-        }
-      } catch (error) {
-        console.error(`处理转录结果错误 - 连接 ${connectionId}:`, error);
-      }
-    });
-
-    // 处理连接关闭
-    ws.on('close', () => {
-      this.cleanupConnection(connectionId);
-    });
-
-    // 处理错误
-    ws.on('error', (error) => {
-      console.error(`WebSocket 错误 - 连接 ${connectionId}:`, error);
-      this.cleanupConnection(connectionId);
     });
   }
 
