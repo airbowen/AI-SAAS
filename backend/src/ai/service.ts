@@ -1,52 +1,53 @@
+import { NetworkConfig, BatchProcessor, CacheService, MetricsService } from './types';
+
 class OptimizedAIService {
   private requestQueue: Map<string, Promise<any>>;
   private batchProcessor: BatchProcessor;
+  private retryConfig = {
+    maxRetries: 3,
+    backoffMs: 1000,
+  };
 
   constructor(
     private config: NetworkConfig,
-    private cache: CacheService
+    private cache: CacheService,
+    private metrics: MetricsService
   ) {
     this.requestQueue = new Map();
-    this.batchProcessor = new BatchProcessor(config.optimization);
-  }
-
-  async processRequest<T>(key: string, request: () => Promise<T>): Promise<T> {
-    // 检查缓存
-    const cached = await this.cache.get(key);
-    if (cached) return cached;
-
-    // 合并相同请求
-    const pending = this.requestQueue.get(key);
-    if (pending) return pending;
-
-    // 创建新请求
-    const promise = this.executeRequest(request);
-    this.requestQueue.set(key, promise);
-
-    try {
-      const result = await promise;
-      await this.cache.set(key, result);
-      return result;
-    } finally {
-      this.requestQueue.delete(key);
-    }
-  }
-
-  private async executeRequest<T>(request: () => Promise<T>): Promise<T> {
-    // 使用全球加速器选择最优节点
-    const endpoint = await this.selectBestEndpoint();
-    
-    // 批量处理请求
-    if (this.config.optimization.batchEnabled) {
-      return this.batchProcessor.add(request);
-    }
-
-    return request();
+    this.batchProcessor = new BatchProcessor(config.optimization.batchSize);
   }
 
   private async selectBestEndpoint(): Promise<string> {
-    // 实现智能节点选择逻辑
-    // 可以基于延迟、可用性等指标
-    return this.config.globalAccelerator.endpoints[0];
+    const endpoints = this.config.endpoints;
+    const latencies = await Promise.all(
+      endpoints.map(async (endpoint) => {
+        const start = Date.now();
+        try {
+          await fetch(`${endpoint}/health`);
+          return { endpoint, latency: Date.now() - start };
+        } catch (error) {
+          return { endpoint, latency: Infinity };
+        }
+      })
+    );
+    return latencies.sort((a, b) => a.latency - b.latency)[0].endpoint;
+  }
+
+  private async executeWithRetry<T>(operation: () => Promise<T>): Promise<T> {
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < this.retryConfig.maxRetries; attempt++) {
+      try {
+        const result = await operation();
+        this.metrics.recordSuccess();
+        return result;
+      } catch (error) {
+        lastError = error as Error;
+        this.metrics.recordError(error as Error);
+        await new Promise(resolve => 
+          setTimeout(resolve, this.retryConfig.backoffMs * Math.pow(2, attempt))
+        );
+      }
+    }
+    throw lastError;
   }
 }

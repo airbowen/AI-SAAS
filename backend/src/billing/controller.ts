@@ -29,7 +29,7 @@ export async function recharge(req: AuthRequest, res: Response) {
         paymentResult = await fomoPayService.createOrder(amount, currency, userId);
         break;
       case 'stripe':
-        paymentResult = await createStripePayment(amount, currency, userId);
+        paymentResult = await createStripePayment(amount, currency, String(userId));
         break;
       default:
         return res.status(400).json({ error: '不支持的支付方式' });

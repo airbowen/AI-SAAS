@@ -65,4 +65,17 @@ class AudioTranscriptionServer {
       });
     }, this.heartbeatInterval);
   }
+
+  private async authenticateUser(req: any): Promise<string | null> {
+    try {
+      const token = req.headers['authorization']?.split(' ')[1];
+      if (!token) return null;
+
+      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
+      return decoded.userId;
+    } catch (error) {
+      console.error('Authentication error:', error);
+      return null;
+    }
+  }
 }
