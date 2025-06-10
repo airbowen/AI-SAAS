@@ -15,14 +15,105 @@ const stripe = new Stripe(stripeConfig.secretKey, {
 
 // 创建 FomoPay 订单
 async function createFomoPayOrder(amount: number, currency: string, userId: string): Promise<PaymentResult> {
-  // TODO: 实现 FomoPay 支付逻辑
-  throw new Error('FomoPay 支付功能尚未实现');
+  try {
+    const orderNo = `ORDER_${Date.now()}_${userId}`;
+    
+    // 发送请求到 FomoPay
+    const response = await fetch(`${fomoPayConfig.apiEndpoint}/payment/create`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${fomoPayConfig.merchantSecret}`
+      },
+      body: JSON.stringify({
+        merchant_id: fomoPayConfig.merchantId,
+        order_no: orderNo,
+        amount: amount.toFixed(2),
+        currency,
+        payment_method: 'PAYNOW_ONLINE',
+        description: `充值 ${amount} ${currency}`,
+        success_url: `${process.env.APP_URL}/payment/success`,
+        fail_url: `${process.env.APP_URL}/payment/fail`,
+        notification_url: `${process.env.API_URL}/api/billing/payment-notify/fomopay`
+      })
+    });
+
+    const result = await response.json();
+
+    if (!response.ok || result.error) {
+      throw new Error(result.error || '创建支付订单失败');
+    }
+
+    // 在数据库中创建交易记录
+    await prisma.transaction.create({
+      data: {
+        userId,
+        amount,
+        currency,
+        status: 'pending',
+        paymentMethod: 'fomo_pay',
+        orderId: orderNo,
+        paymentId: result.payment_id
+      }
+    });
+
+    return {
+      success: true,
+      orderId: orderNo,
+      paymentUrl: result.payment_url
+    };
+  } catch (error) {
+    console.error('FomoPay 创建订单失败:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '创建支付订单失败'
+    };
+  }
 }
 
 // 处理 FomoPay 支付通知
 export async function handlePaymentNotify(req: Request, res: Response) {
-  // TODO: 实现 FomoPay 支付通知处理逻辑
-  res.status(501).json({ error: 'FomoPay 支付通知处理功能尚未实现' });
+  try {
+    const { order_no, payment_id, status, amount } = req.body;
+
+    // 更新交易状态
+    const transaction = await prisma.transaction.findFirst({
+      where: {
+        orderId: order_no,
+        paymentId: payment_id
+      }
+    });
+
+    if (!transaction) {
+      throw new Error('未找到对应的交易记录');
+    }
+
+    // 更新交易状态
+    await prisma.transaction.update({
+      where: { id: transaction.id },
+      data: { status: status.toLowerCase() }
+    });
+
+    // 如果支付成功，更新用户余额
+    if (status.toLowerCase() === 'success') {
+      await prisma.user.update({
+        where: { id: transaction.userId },
+        data: {
+          balance: {
+            increment: parseFloat(amount)
+          }
+        }
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('处理 FomoPay 支付通知失败:', error);
+    res.status(400).json({
+      success: false,
+      error: error instanceof Error ? error.message : '处理支付通知失败'
+    });
+  }
 }
 
 export async function recharge(req: AuthRequest, res: Response) {
