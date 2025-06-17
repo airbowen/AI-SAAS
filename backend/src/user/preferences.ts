@@ -1,3 +1,5 @@
+import { PrismaClient } from "@prisma/client";
+
 export interface UserPreferences {
   language: string;
   theme: 'light' | 'dark';

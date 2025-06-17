@@ -28,19 +28,25 @@ export function AudioCapture() {
   }, [stream]);
 
   return (
-    <div className="audio-capture">
-      <h2>音频捕获</h2>
-      {error && <div className="error">{error}</div>}
-      <button
-        onClick={isCapturing ? stopCapture : startCapture}
-      >
-        {isCapturing ? '停止捕获' : '开始捕获'}
-      </button>
-      {isCapturing && (
-        <div className="status">
-          正在捕获音频...
-        </div>
-      )}
+    <div className="audio-capture-container">
+      <header className="audio-capture-header">
+        <h1>音频共享</h1>
+      </header>
+      <div className="audio-capture">
+        <h2>音频捕获</h2>
+        {error && <div className="error">{error}</div>}
+        <button
+          onClick={isCapturing ? stopCapture : startCapture}
+          className="capture-button"
+        >
+          {isCapturing ? '停止捕获' : '开始捕获'}
+        </button>
+        {isCapturing && (
+          <div className="status">
+            正在捕获音频...
+          </div>
+        )}
+      </div>
     </div>
   );
 }

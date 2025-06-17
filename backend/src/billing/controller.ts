@@ -26,7 +26,7 @@ export async function recharge(req: AuthRequest, res: Response) {
     let paymentResult: PaymentResult;
     switch (paymentMethod) {
       case 'fomo_pay':
-        paymentResult = await fomoPayService.createOrder(amount, currency, userId);
+        paymentResult = await fomoPayService.createOrder(amount, currency, String(userId));
         break;
       case 'stripe':
         paymentResult = await createStripePayment(amount, currency, String(userId));

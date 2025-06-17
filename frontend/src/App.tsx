@@ -1,14 +1,19 @@
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AudioCapture } from './components/AudioCapture';
+import { Login } from './components/Login';
 import './App.css';
 
 function App() {
   return (
-    <div className="App">
-      <header className="App-header">
-        <h1>音频共享</h1>
-        <AudioCapture />
-      </header>
-    </div>
+    <Router>
+      <div className="App">
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/audio" element={<AudioCapture />} />
+          <Route path="/" element={<Navigate to="/audio" />} />
+        </Routes>
+      </div>
+    </Router>
   );
 }
 
