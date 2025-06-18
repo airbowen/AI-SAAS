@@ -14,10 +14,10 @@ function generateVerificationCode(): string {
 // 发送验证码
 export async function sendCode(req: Request, res: Response) {
   try {
-    const { phone }: SendCodeInput = req.body;
+    const { phone, countryCode }: SendCodeInput = req.body;
 
     // 检查是否频繁发送
-    const lastSentTime = await redis.get(`sms:lastSent:${phone}`);
+    const lastSentTime = await redis.get(`sms:lastSent:${countryCode}${phone}`);
     if (lastSentTime && Date.now() - parseInt(lastSentTime) < 60000) {
       return res.status(429).json({ error: '请等待60秒后再试' });
     }
@@ -25,17 +25,51 @@ export async function sendCode(req: Request, res: Response) {
     const code = generateVerificationCode();
     
     // 将验证码存入 Redis，5分钟过期
-    await redis.setex(`sms:code:${phone}`, 300, code);
+    await redis.setex(`sms:code:${countryCode}${phone}`, 300, code);
     // 记录发送时间
-    await redis.set(`sms:lastSent:${phone}`, Date.now().toString());
+    await redis.set(`sms:lastSent:${countryCode}${phone}`, Date.now().toString());
 
-    // TODO: 这里需要集成实际的短信服务
     // 开发环境直接返回验证码
     if (process.env.NODE_ENV === 'development') {
       return res.json({ message: '验证码已发送', code });
     }
 
-    res.json({ message: '验证码已发送' });
+    // 腾讯云短信发送
+    const tencentcloud = require("tencentcloud-sdk-nodejs");
+    const SmsClient = tencentcloud.sms.v20210111.Client;
+    
+    const client = new SmsClient({
+      credential: {
+        secretId: process.env.TENCENT_SECRET_ID,
+        secretKey: process.env.TENCENT_SECRET_KEY,
+      },
+      region: "ap-guangzhou",
+      profile: {
+        signMethod: "TC3-HMAC-SHA256",
+        httpProfile: {
+          reqMethod: "POST",
+          reqTimeout: 30,
+          endpoint: "sms.tencentcloudapi.com",
+        },
+      },
+    });
+
+    const params = {
+      SmsSdkAppId: process.env.TENCENT_SMS_SDK_APPID,
+      SignName: process.env.TENCENT_SMS_SIGN,
+      TemplateId: process.env.TENCENT_SMS_TEMPLATE_ID,
+      TemplateParamSet: [code],
+      PhoneNumberSet: [`${countryCode}${phone}`],  // 使用传入的区号
+    };
+
+    const result = await client.SendSms(params);
+    
+    if (result.SendStatusSet[0].Code === "Ok") {
+      res.json({ message: '验证码已发送' });
+    } else {
+      throw new Error(result.SendStatusSet[0].Message);
+    }
+
   } catch (error) {
     console.error('发送验证码错误:', error);
     res.status(500).json({ error: '发送验证码失败' });
@@ -45,22 +79,32 @@ export async function sendCode(req: Request, res: Response) {
 // 验证码登录
 export async function verifyCode(req: Request, res: Response) {
   try {
-    const { phone, code }: VerifyCodeInput = req.body;
+    const { phone, countryCode, code }: VerifyCodeInput = req.body;
 
     // 获取存储的验证码
-    const storedCode = await redis.get(`sms:code:${phone}`);
+    const storedCode = await redis.get(`sms:code:${countryCode}${phone}`);
     if (!storedCode || storedCode !== code) {
       return res.status(400).json({ error: '验证码错误或已过期' });
     }
 
     // 验证成功后删除验证码
-    await redis.del(`sms:code:${phone}`);
+    await redis.del(`sms:code:${countryCode}${phone}`);
 
     // 查找或创建用户
-    let user = await prisma.user.findUnique({ where: { phone } });
+    let user = await prisma.user.findUnique({ 
+      where: { 
+        phone_countryCode: {
+          phone,
+          countryCode
+        }
+      } 
+    });
     if (!user) {
       user = await prisma.user.create({
-        data: { phone }
+        data: { 
+          phone,
+          countryCode
+        }
       });
     }
 

@@ -11,6 +11,7 @@ datasource db {
 model User {
   id            String         @id @default(cuid())
   phone         String         @unique                 // 主要身份标识
+  countryCode   String         @default("+86")        // 国际区号
   email         String?        @unique                 // 可选的辅助联系方式
   balance       Float          @default(0)          // 用户余额
   quotaLimit    Float          @default(0)          // API 调用配额限制（分钟）
@@ -48,4 +49,5 @@ model UsageLog {
 
   @@index([userId, type])
   @@index([createdAt])
+  @@unique([phone, countryCode])
 }

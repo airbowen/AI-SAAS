@@ -10,10 +10,12 @@ interface LoginInput {
 
 export interface SendCodeInput {
   phone: string;
+  countryCode: string;  // 添加国际区号字段
 }
 
 export interface VerifyCodeInput {
   phone: string;
+  countryCode: string;  // 添加国际区号字段
   code: string;
 }
 
