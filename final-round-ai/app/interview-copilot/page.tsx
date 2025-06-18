@@ -29,6 +29,34 @@ export default function InterviewCopilotPage() {
     { label: "Answer Length", value: "Optimal", status: "positive" },
   ]
 
+  const connectWebSocket = () => {
+    const token = 'your-auth-token'; // 从你的认证系统获取
+    const ws = new WebSocket('ws://localhost/ws');
+  
+    ws.onopen = () => {
+      // 发送认证信息
+      ws.send(JSON.stringify({
+        type: 'auth',
+        token: token
+      }));
+    };
+  
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      console.log('Received:', data);
+    };
+  
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+    };
+  
+    ws.onclose = () => {
+      console.log('WebSocket closed');
+    };
+  
+    return ws;
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar currentPage="interview-copilot" />

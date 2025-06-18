@@ -1,84 +1,31 @@
 
-version: '3.8'
+version: '3'
 
 services:
-  backend:
-    build: 
-      context: ./backend
-      dockerfile: Dockerfile
-    environment:
-      - NODE_ENV=production
-      - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
-      - JWT_SECRET=${JWT_SECRET}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    ports:
-      - "3000:3000"
-    depends_on:
-      - redis
-      - db
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    deploy:
-      replicas: 2
-      update_config:
-        parallelism: 1
-        delay: 10s
-      restart_policy:
-        condition: on-failure
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+  traefik:
+    image: traefik:v2.10
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
     ports:
       - "80:80"
-    depends_on:
-      - backend
-
-  redis:
-    image: redis:alpine
-    ports:
-      - "6379:6379"
+      - "8080:8080"  # Traefik 管理界面
     volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
+      - /var/run/docker.sock:/var/run/docker.sock
 
-  db:
-    image: mysql:8
+  interview-backend:
+    build:
+      context: ./backend
     environment:
-      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
-      - MYSQL_DATABASE=${DB_NAME}
-      - MYSQL_USER=${DB_USER}
-      - MYSQL_PASSWORD=${DB_PASSWORD}
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-    command: --default-authentication-plugin=mysql_native_password
-
-  prometheus:
-    image: prom/prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-
-  grafana:
-    image: grafana/grafana
-    ports:
-      - "3001:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-    depends_on:
-      - prometheus
-
-volumes:
-  redis_data:
-  mysql_data:
-  prometheus_data:
-  grafana_data:
+      - NODE_ENV=development
+      - PORT=3000
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.interview.rule=PathPrefix(`/ws`)"
+      - "traefik.http.routers.interview.entrypoints=web"
+      - "traefik.http.services.interview.loadbalancer.sticky.cookie=true"
+      - "traefik.http.services.interview.loadbalancer.sticky.cookie.name=interview_session"
+    deploy:
+      replicas: 2  # 运行两个后端实例
