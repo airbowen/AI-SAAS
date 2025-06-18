@@ -10,17 +10,19 @@ datasource db {
 
 model User {
   id            String         @id @default(cuid())
-  phone         String         @unique                 // 主要身份标识
-  countryCode   String         @default("+86")        // 国际区号
-  email         String?        @unique                 // 可选的辅助联系方式
-  balance       Float          @default(0)          // 用户余额
-  quotaLimit    Float          @default(0)          // API 调用配额限制（分钟）
-  usedQuota     Float          @default(0)          // 已使用的配额
-  status        String         @default("active")   // 用户状态：active/suspended
+  phone         String                             // 主要身份标识
+  countryCode   String         @default("+86")    // 国际区号
+  email         String?        @unique            // 可选的辅助联系方式
+  balance       Float          @default(0)        // 用户余额
+  quotaLimit    Float          @default(0)        // API 调用配额限制（分钟）
+  usedQuota     Float          @default(0)        // 已使用的配额
+  status        String         @default("active") // 用户状态：active/suspended
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
-  transactions  Transaction[]                       // 关联交易记录
-  usageLogs     UsageLog[]                         // 关联使用记录
+  transactions  Transaction[]                     // 关联交易记录
+  usageLogs     UsageLog[]                       // 关联使用记录
+
+  @@unique([phone, countryCode])  // 确保手机号和区号的组合是唯一的
 }
 
 model Transaction {
@@ -49,5 +51,4 @@ model UsageLog {
 
   @@index([userId, type])
   @@index([createdAt])
-  @@unique([phone, countryCode])
 }

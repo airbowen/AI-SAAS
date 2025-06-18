@@ -1,12 +1,13 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Navbar } from "@/components/navbar"
 import { Footer } from "@/components/footer"
 import { Mic, MicOff, Video, VideoOff, Settings, Lightbulb, MessageSquare, Clock, CheckCircle } from "lucide-react"
+import { captureTabAudio } from "@/lib/audioCapture"
 
 export default function InterviewCopilotPage() {
   const [isRecording, setIsRecording] = useState(false)
@@ -15,6 +16,41 @@ export default function InterviewCopilotPage() {
     { speaker: "Interviewer", text: "Tell me about yourself and your background.", time: "00:01" },
     { speaker: "You", text: "I'm a software engineer with 5 years of experience...", time: "00:15" },
   ])
+  const audioRef = useRef<{ stop: () => void } | null>(null)
+
+  const startRecording = async () => {
+    try {
+      audioRef.current = await captureTabAudio({
+        onTranscription: (text) => {
+          setTranscription(prev => [...prev, {
+            speaker: "You",
+            text: text,
+            time: new Date().toLocaleTimeString()
+          }])
+        },
+        onError: (error) => {
+          console.error('录音错误:', error)
+          setIsRecording(false)
+        }
+      })
+      setIsRecording(true)
+    } catch (error) {
+      console.error('启动录音失败:', error)
+      setIsRecording(false)
+    }
+  }
+
+  const stopRecording = () => {
+    audioRef.current?.stop()
+    audioRef.current = null
+    setIsRecording(false)
+  }
+
+  useEffect(() => {
+    return () => {
+      audioRef.current?.stop()
+    }
+  }, [])
 
   const suggestions = [
     "Mention your specific achievements with metrics",
