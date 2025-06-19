@@ -4,6 +4,8 @@ interface CaptureOptions {
   onError?: (error: Error) => void;
   onSuccess?: (stream: MediaStream) => void;
   onTranscription?: (text: string) => void;
+  tencentCloudSecretId?: string;
+  tencentCloudSecretKey?: string;
 }
 
 export async function captureTabAudio(options: CaptureOptions = {}) {
@@ -21,7 +23,9 @@ export async function captureTabAudio(options: CaptureOptions = {}) {
     }
 
     const mediaRecorder = new MediaRecorder(stream);
-    const wsClient = new WebSocketClient('ws://localhost/ws', {
+    const wsClient = new WebSocketClient('ws://your-backend-url/ws', {
+      tencentCloudSecretId: options.tencentCloudSecretId,
+      tencentCloudSecretKey: options.tencentCloudSecretKey,
       onMessage: (event: MessageEvent<any>) => {
         const response = JSON.parse(event.data);
         if (response.type === 'transcription') {

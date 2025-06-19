@@ -10,35 +10,55 @@ import { Mic, MicOff, Video, VideoOff, Settings, Lightbulb, MessageSquare, Clock
 import { captureTabAudio } from "@/lib/audioCapture"
 
 export default function InterviewCopilotPage() {
-  const [isRecording, setIsRecording] = useState(false)
-  const [isVideoOn, setIsVideoOn] = useState(true)
-  const [transcription, setTranscription] = useState([
-    { speaker: "Interviewer", text: "Tell me about yourself and your background.", time: "00:01" },
-    { speaker: "You", text: "I'm a software engineer with 5 years of experience...", time: "00:15" },
-  ])
-  const audioRef = useRef<{ stop: () => void } | null>(null)
+  const [isRecording, setIsRecording] = useState(false);
+  const [isVideoOn, setIsVideoOn] = useState(true);
+  const [transcription, setTranscription] = useState([]);
+  const audioRef = useRef<{ stop: () => void } | null>(null);
 
   const startRecording = async () => {
     try {
       audioRef.current = await captureTabAudio({
-        onTranscription: (text) => {
+        tencentCloudSecretId: process.env.NEXT_PUBLIC_TENCENT_CLOUD_SECRET_ID,
+        tencentCloudSecretKey: process.env.NEXT_PUBLIC_TENCENT_CLOUD_SECRET_KEY,
+        onTranscription: async (text) => {
+          // 添加新的转录文本
           setTranscription(prev => [...prev, {
             speaker: "You",
             text: text,
             time: new Date().toLocaleTimeString()
-          }])
+          }]);
+
+          // 调用 OpenAI API 进行分析
+          try {
+            const response = await fetch('/api/analyze', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ text })
+            });
+            
+            const aiResponse = await response.json();
+            setTranscription(prev => [...prev, {
+              speaker: "AI",
+              text: aiResponse.text,
+              time: new Date().toLocaleTimeString()
+            }]);
+          } catch (error) {
+            console.error('AI 分析错误:', error);
+          }
         },
         onError: (error) => {
-          console.error('录音错误:', error)
-          setIsRecording(false)
+          console.error('录音错误:', error);
+          setIsRecording(false);
         }
-      })
-      setIsRecording(true)
+      });
+      setIsRecording(true);
     } catch (error) {
-      console.error('启动录音失败:', error)
-      setIsRecording(false)
+      console.error('启动录音失败:', error);
+      setIsRecording(false);
     }
-  }
+  };
 
   const stopRecording = () => {
     audioRef.current?.stop()

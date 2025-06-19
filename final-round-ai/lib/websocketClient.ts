@@ -2,6 +2,8 @@ interface WebSocketOptions {
   onOpen?: () => void;
   onMessage?: (event: MessageEvent<any>) => void;
   onError?: (error: Error) => void;
+  tencentCloudSecretId?: string;
+  tencentCloudSecretKey?: string;
 }
 
 export class WebSocketClient {
@@ -19,6 +21,14 @@ export class WebSocketClient {
     this.ws.onopen = () => {
       this.reconnectAttempts = 0;
       this.startHeartbeat();
+      // 发送腾讯云认证信息
+      if (this.options.tencentCloudSecretId && this.options.tencentCloudSecretKey) {
+        this.ws.send(JSON.stringify({
+          type: 'auth',
+          secretId: this.options.tencentCloudSecretId,
+          secretKey: this.options.tencentCloudSecretKey
+        }));
+      }
       this.options.onOpen?.();
     };
 
@@ -67,7 +77,13 @@ export class WebSocketClient {
 
   send(data: any) {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(data));
+      if (data instanceof Blob) {
+        // 如果是音频数据，直接发送
+        this.ws.send(data);
+      } else {
+        // 其他数据转为 JSON 字符串
+        this.ws.send(JSON.stringify(data));
+      }
     } else {
       throw new Error('WebSocket is not connected');
     }
